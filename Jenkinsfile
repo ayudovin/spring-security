@@ -19,7 +19,7 @@ try {
 					currentBuild.result = 'FAILED: check'
 					throw e
 				} finally {
-					junit '**/build/*-results/*.xml'
+					junit '**/build/test-results/*/*.xml'
 				}
 			}
 		}
@@ -44,7 +44,7 @@ try {
 			node {
 				checkout scm
 				try {
-					sh "./gradlew clean test -PspringVersion='5.+' -PreactorVersion=Californium-BUILD-SNAPSHOT -PspringDataVersion=Lovelace-BUILD-SNAPSHOT --refresh-dependencies --no-daemon --stacktrace"
+					sh "./gradlew clean test -PforceMavenRepositories=snapshot -PspringVersion='5.1.0.BUILD-SNAPSHOT' -PreactorVersion=Californium-BUILD-SNAPSHOT -PspringDataVersion=Lovelace-BUILD-SNAPSHOT --refresh-dependencies --no-daemon --stacktrace"
 				} catch(Exception e) {
 					currentBuild.result = 'FAILED: snapshots'
 					throw e
@@ -66,36 +66,6 @@ try {
 				}
 			}
 		}
-	},
-	jdk10: {
-		stage('JDK 10') {
-			node {
-				checkout scm
-				try {
-					withEnv(["JAVA_HOME=${ tool 'jdk10' }"]) {
-						sh "./gradlew clean test --refresh-dependencies --no-daemon --stacktrace"
-					}
-				} catch(Exception e) {
-					currentBuild.result = 'FAILED: jdk10'
-					throw e
-				}
-			}
-		}
-	},
-	 jdk11: {
-		 stage('JDK 11') {
-			 node {
-				 checkout scm
-				 try {
-					 withEnv(["JAVA_HOME=${ tool 'jdk11' }"]) {
-						 sh "./gradlew clean test --refresh-dependencies --no-daemon --stacktrace"
-					 }
-				 } catch(Exception e) {
-					 currentBuild.result = 'FAILED: jdk11'
-					 throw e
-				 }
-			 }
-		 }
 	}
 
 	if(currentBuild.result == 'SUCCESS') {

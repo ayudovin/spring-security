@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2018 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,7 +74,7 @@ import java.util.Base64;
  * @author Rob Winch
  * @since 5.0
  * @deprecated Digest based password encoding is not considered secure. Instead use an
- * adaptive one way funciton like BCryptPasswordEncoder, Pbkdf2PasswordEncoder, or
+ * adaptive one way function like BCryptPasswordEncoder, Pbkdf2PasswordEncoder, or
  * SCryptPasswordEncoder. Even better use {@link DelegatingPasswordEncoder} which supports
  * password upgrades. There are no plans to remove this support. It is deprecated to indicate
  * that this is a legacy implementation and using it is considered insecure.
@@ -162,11 +162,11 @@ public class MessageDigestPasswordEncoder implements PasswordEncoder {
 
 	private String extractSalt(String prefixEncodedPassword) {
 		int start = prefixEncodedPassword.indexOf(PREFIX);
-		if(start != 0) {
+		if (start != 0) {
 			return "";
 		}
 		int end = prefixEncodedPassword.indexOf(SUFFIX, start);
-		if(end < 0) {
+		if (end < 0) {
 			return "";
 		}
 		return prefixEncodedPassword.substring(start, end + 1);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2018 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,10 @@
  */
 package org.springframework.security.oauth2.jwt;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
+
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jwt.JWT;
@@ -24,21 +28,31 @@ import com.nimbusds.jwt.SignedJWT;
 import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import org.assertj.core.api.Assertions;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.http.RequestEntity;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jose.jws.JwsAlgorithms;
+import org.springframework.web.client.RestTemplate;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatCode;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.powermock.api.mockito.PowerMockito.mockStatic;
+import static org.powermock.api.mockito.PowerMockito.spy;
 import static org.powermock.api.mockito.PowerMockito.when;
 import static org.powermock.api.mockito.PowerMockito.whenNew;
 
@@ -62,6 +76,8 @@ public class NimbusJwtDecoderJwkSupportTests {
 	private static final String MALFORMED_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJuYmYiOnt9LCJleHAiOjQ2ODQyMjUwODd9.guoQvujdWvd3xw7FYQEn4D6-gzM_WqFvXdmvAUNSLbxG7fv2_LLCNujPdrBHJoYPbOwS1BGNxIKQWS1tylvqzmr1RohQ-RZ2iAM1HYQzboUlkoMkcd8ENM__ELqho8aNYBfqwkNdUOyBFoy7Syu_w2SoJADw2RTjnesKO6CVVa05bW118pDS4xWxqC4s7fnBjmZoTn4uQ-Kt9YSQZQk8YQxkJSiyanozzgyfgXULA6mPu1pTNU3FVFaK1i1av_xtH_zAPgb647ZeaNe4nahgqC5h8nhOlm8W2dndXbwAt29nd2ZWBsru_QwZz83XSKLhTPFz-mPBByZZDsyBbIHf9A";
 	private static final String UNSIGNED_JWT = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOi0yMDMzMjI0OTcsImp0aSI6IjEyMyIsInR5cCI6IkpXVCJ9.";
 
+	private NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(JWK_SET_URL, JWS_ALGORITHM);
+
 	@Test
 	public void constructorWhenJwkSetUrlIsNullThenThrowIllegalArgumentException() {
 		assertThatThrownBy(() -> new NimbusJwtDecoderJwkSupport(null))
@@ -81,9 +97,14 @@ public class NimbusJwtDecoderJwkSupportTests {
 	}
 
 	@Test
+	public void setRestOperationsWhenNullThenThrowIllegalArgumentException() {
+		Assertions.assertThatThrownBy(() -> this.jwtDecoder.setRestOperations(null))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
 	public void decodeWhenJwtInvalidThenThrowJwtException() {
-		NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(JWK_SET_URL, JWS_ALGORITHM);
-		assertThatThrownBy(() -> jwtDecoder.decode("invalid"))
+		assertThatThrownBy(() -> this.jwtDecoder.decode("invalid"))
 				.isInstanceOf(JwtException.class);
 	}
 
@@ -103,16 +124,14 @@ public class NimbusJwtDecoderJwkSupportTests {
 		JWTClaimsSet jwtClaimsSet = new JWTClaimsSet.Builder().audience("resource1").build();
 		when(jwtProcessor.process(any(JWT.class), eq(null))).thenReturn(jwtClaimsSet);
 
-		NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(JWK_SET_URL, JWS_ALGORITHM);
+		NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(JWK_SET_URL);
 		assertThatCode(() -> jwtDecoder.decode("encoded-jwt")).doesNotThrowAnyException();
 	}
 
 	// gh-5457
 	@Test
-	public void decodeWhenPlainJwtThenExceptionDoesNotMentionClass() throws Exception {
-		NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(JWK_SET_URL, JWS_ALGORITHM);
-
-		assertThatCode(() -> jwtDecoder.decode(UNSIGNED_JWT))
+	public void decodeWhenPlainJwtThenExceptionDoesNotMentionClass() {
+		assertThatCode(() -> this.jwtDecoder.decode(UNSIGNED_JWT))
 				.isInstanceOf(JwtException.class)
 				.hasMessageContaining("Unsupported algorithm of none");
 	}
@@ -122,12 +141,11 @@ public class NimbusJwtDecoderJwkSupportTests {
 		try ( MockWebServer server = new MockWebServer() ) {
 			server.enqueue(new MockResponse().setBody(JWK_SET));
 			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
-
-			NimbusJwtDecoderJwkSupport decoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
-
-			assertThatCode(() -> decoder.decode(MALFORMED_JWT))
+			NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
+			assertThatCode(() -> jwtDecoder.decode(MALFORMED_JWT))
 					.isInstanceOf(JwtException.class)
 					.hasMessage("An error occurred while attempting to decode the Jwt: Malformed payload");
+			server.shutdown();
 		}
 	}
 
@@ -136,28 +154,106 @@ public class NimbusJwtDecoderJwkSupportTests {
 		try ( MockWebServer server = new MockWebServer() ) {
 			server.enqueue(new MockResponse().setBody(MALFORMED_JWK_SET));
 			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
-
-			NimbusJwtDecoderJwkSupport decoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
-
-			assertThatCode(() -> decoder.decode(SIGNED_JWT))
+			NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
+			assertThatCode(() -> jwtDecoder.decode(SIGNED_JWT))
 					.isInstanceOf(JwtException.class)
 					.hasMessage("An error occurred while attempting to decode the Jwt: Malformed Jwk set");
+			server.shutdown();
 		}
 	}
 
 	@Test
-	public void decodeWhenJwkEndpointIsUnresponsiveThenRetrunsJwtException() throws Exception {
+	public void decodeWhenJwkEndpointIsUnresponsiveThenReturnsJwtException() throws Exception {
 		try ( MockWebServer server = new MockWebServer() ) {
 			server.enqueue(new MockResponse().setBody(MALFORMED_JWK_SET));
+			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
+			NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
+			assertThatCode(() -> jwtDecoder.decode(SIGNED_JWT))
+					.isInstanceOf(JwtException.class)
+					.hasMessageContaining("An error occurred while attempting to decode the Jwt");
+			server.shutdown();
+		}
+	}
+
+	// gh-5603
+	@Test
+	public void decodeWhenCustomRestOperationsSetThenUsed() throws Exception {
+		try ( MockWebServer server = new MockWebServer() ) {
+			server.enqueue(new MockResponse().setBody(JWK_SET));
+			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
+			NimbusJwtDecoderJwkSupport jwtDecoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
+			RestTemplate restTemplate = spy(new RestTemplate());
+			jwtDecoder.setRestOperations(restTemplate);
+			assertThatCode(() -> jwtDecoder.decode(SIGNED_JWT)).doesNotThrowAnyException();
+			verify(restTemplate).exchange(any(RequestEntity.class), eq(String.class));
+			server.shutdown();
+		}
+	}
+
+	@Test
+	public void decodeWhenJwtFailsValidationThenReturnsCorrespondingErrorMessage() throws Exception {
+		try ( MockWebServer server = new MockWebServer() ) {
+			server.enqueue(new MockResponse().setBody(JWK_SET));
 			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
 
 			NimbusJwtDecoderJwkSupport decoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
 
-			server.shutdown();
+			OAuth2Error failure = new OAuth2Error("mock-error", "mock-description", "mock-uri");
+
+			OAuth2TokenValidator<Jwt> jwtValidator = mock(OAuth2TokenValidator.class);
+			when(jwtValidator.validate(any(Jwt.class))).thenReturn(OAuth2TokenValidatorResult.failure(failure));
+			decoder.setJwtValidator(jwtValidator);
 
 			assertThatCode(() -> decoder.decode(SIGNED_JWT))
-					.isInstanceOf(JwtException.class)
-					.hasMessageContaining("An error occurred while attempting to decode the Jwt");
+					.isInstanceOf(JwtValidationException.class)
+					.hasMessageContaining("mock-description");
 		}
+	}
+
+	@Test
+	public void decodeWhenJwtValidationHasTwoErrorsThenJwtExceptionMessageShowsFirstError() throws Exception {
+		try ( MockWebServer server = new MockWebServer() ) {
+			server.enqueue(new MockResponse().setBody(JWK_SET));
+			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
+
+			NimbusJwtDecoderJwkSupport decoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
+
+			OAuth2Error firstFailure = new OAuth2Error("mock-error", "mock-description", "mock-uri");
+			OAuth2Error secondFailure = new OAuth2Error("another-error", "another-description", "another-uri");
+			OAuth2TokenValidatorResult result = OAuth2TokenValidatorResult.failure(firstFailure, secondFailure);
+
+			OAuth2TokenValidator<Jwt> jwtValidator = mock(OAuth2TokenValidator.class);
+			when(jwtValidator.validate(any(Jwt.class))).thenReturn(result);
+			decoder.setJwtValidator(jwtValidator);
+
+			assertThatCode(() -> decoder.decode(SIGNED_JWT))
+					.isInstanceOf(JwtValidationException.class)
+					.hasMessageContaining("mock-description")
+					.hasFieldOrPropertyWithValue("errors", Arrays.asList(firstFailure, secondFailure));
+		}
+	}
+
+	@Test
+	public void decodeWhenUsingSignedJwtThenReturnsClaimsGivenByClaimSetConverter() throws Exception {
+		try ( MockWebServer server = new MockWebServer() ) {
+			server.enqueue(new MockResponse().setBody(JWK_SET));
+			String jwkSetUrl = server.url("/.well-known/jwks.json").toString();
+
+			NimbusJwtDecoderJwkSupport decoder = new NimbusJwtDecoderJwkSupport(jwkSetUrl);
+
+			Converter<Map<String, Object>, Map<String, Object>> claimSetConverter = mock(Converter.class);
+			when(claimSetConverter.convert(any(Map.class))).thenReturn(Collections.singletonMap("custom", "value"));
+			decoder.setClaimSetConverter(claimSetConverter);
+
+			Jwt jwt = decoder.decode(SIGNED_JWT);
+			assertThat(jwt.getClaims().size()).isEqualTo(1);
+			assertThat(jwt.getClaims().get("custom")).isEqualTo("value");
+		}
+	}
+
+	@Test
+	public void setClaimSetConverterWhenIsNullThenThrowsIllegalArgumentException() {
+		assertThatCode(() -> jwtDecoder.setClaimSetConverter(null))
+				.isInstanceOf(IllegalArgumentException.class);
 	}
 }

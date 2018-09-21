@@ -23,7 +23,7 @@
 			http://www.springframework.org/schema/security/spring-security.xsd
 			http://www.springframework.org/schema/beans
 			http://www.springframework.org/schema/beans/spring-beans.xsd">
-	<user-service>
+	<user-service id="us">
 		<user name="user" password="{noop}password" authorities="ROLE_USER"/>
 		<user name="admin" password="{noop}password" authorities="ROLE_ADMIN"/>
 	</user-service>

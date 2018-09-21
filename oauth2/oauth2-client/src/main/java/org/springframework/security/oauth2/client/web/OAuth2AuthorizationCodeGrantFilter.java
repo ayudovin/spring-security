@@ -24,7 +24,7 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authoriza
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthorizationCodeAuthenticationToken;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationExchange;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
@@ -158,13 +158,17 @@ public class OAuth2AuthorizationCodeGrantFilter extends OncePerRequestFilter {
 	private void processAuthorizationResponse(HttpServletRequest request, HttpServletResponse response)
 		throws ServletException, IOException {
 
-		OAuth2AuthorizationRequest authorizationRequest = this.authorizationRequestRepository.removeAuthorizationRequest(request);
+		OAuth2AuthorizationRequest authorizationRequest =
+				this.authorizationRequestRepository.removeAuthorizationRequest(request, response);
 
 		String registrationId = (String) authorizationRequest.getAdditionalParameters().get(OAuth2ParameterNames.REGISTRATION_ID);
 		ClientRegistration clientRegistration = this.clientRegistrationRepository.findByRegistrationId(registrationId);
 
 		MultiValueMap<String, String> params = OAuth2AuthorizationResponseUtils.toMultiMap(request.getParameterMap());
-		String redirectUri = request.getRequestURL().toString();
+		String redirectUri = UriComponentsBuilder.fromHttpUrl(UrlUtils.buildFullRequestUrl(request))
+				.replaceQuery(null)
+				.build()
+				.toUriString();
 		OAuth2AuthorizationResponse authorizationResponse = OAuth2AuthorizationResponseUtils.convert(params, redirectUri);
 
 		OAuth2AuthorizationCodeAuthenticationToken authenticationRequest = new OAuth2AuthorizationCodeAuthenticationToken(
@@ -176,7 +180,7 @@ public class OAuth2AuthorizationCodeGrantFilter extends OncePerRequestFilter {
 		try {
 			authenticationResult = (OAuth2AuthorizationCodeAuthenticationToken)
 				this.authenticationManager.authenticate(authenticationRequest);
-		} catch (OAuth2AuthenticationException ex) {
+		} catch (OAuth2AuthorizationException ex) {
 			OAuth2Error error = ex.getError();
 			UriComponentsBuilder uriBuilder = UriComponentsBuilder
 				.fromUriString(authorizationResponse.getRedirectUri())
@@ -192,10 +196,11 @@ public class OAuth2AuthorizationCodeGrantFilter extends OncePerRequestFilter {
 		}
 
 		Authentication currentAuthentication = SecurityContextHolder.getContext().getAuthentication();
+		String principalName = currentAuthentication != null ? currentAuthentication.getName() : "anonymousUser";
 
 		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(
 			authenticationResult.getClientRegistration(),
-			currentAuthentication.getName(),
+			principalName,
 			authenticationResult.getAccessToken(),
 			authenticationResult.getRefreshToken());
 

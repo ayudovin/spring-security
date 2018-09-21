@@ -16,6 +16,7 @@
 
 package org.springframework.security.oauth2.client.web.reactive.function.client;
 
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
@@ -34,23 +35,30 @@ import org.springframework.http.codec.multipart.MultipartHttpMessageWriter;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.mock.http.client.reactive.MockClientHttpRequest;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
-import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
-import org.springframework.security.oauth2.core.AuthorizationGrantType;
-import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
+import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
+import org.springframework.security.oauth2.client.registration.TestClientRegistrations;
+import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
+import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
+import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.reactive.function.BodyInserter;
 import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.util.context.Context;
 
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,8 +68,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.HttpMethod.GET;
+import static org.springframework.security.oauth2.client.web.reactive.function.client.ServerOAuth2AuthorizedClientExchangeFilterFunction.clientRegistrationId;
 import static org.springframework.security.oauth2.client.web.reactive.function.client.ServerOAuth2AuthorizedClientExchangeFilterFunction.oauth2AuthorizedClient;
 
 /**
@@ -71,30 +81,30 @@ import static org.springframework.security.oauth2.client.web.reactive.function.c
 @RunWith(MockitoJUnitRunner.class)
 public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 	@Mock
-	private ReactiveOAuth2AuthorizedClientService authorizedClientService;
+	private ServerOAuth2AuthorizedClientRepository authorizedClientRepository;
 
-	private ServerOAuth2AuthorizedClientExchangeFilterFunction function = new ServerOAuth2AuthorizedClientExchangeFilterFunction();
+	@Mock
+	private ReactiveClientRegistrationRepository clientRegistrationRepository;
+
+	@Mock
+	private ServerWebExchange serverWebExchange;
+
+	private ServerOAuth2AuthorizedClientExchangeFilterFunction function;
 
 	private MockExchangeFunction exchange = new MockExchangeFunction();
 
-	private ClientRegistration github = ClientRegistration.withRegistrationId("github")
-			.redirectUriTemplate("{baseUrl}/{action}/oauth2/code/{registrationId}")
-			.clientAuthenticationMethod(ClientAuthenticationMethod.BASIC)
-			.authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-			.scope("read:user")
-			.authorizationUri("https://github.com/login/oauth/authorize")
-			.tokenUri("https://github.com/login/oauth/access_token")
-			.userInfoUri("https://api.github.com/user")
-			.userNameAttributeName("id")
-			.clientName("GitHub")
-			.clientId("clientId")
-			.clientSecret("clientSecret")
+	private ClientRegistration registration = TestClientRegistrations.clientRegistration()
 			.build();
 
 	private OAuth2AccessToken accessToken = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,
 			"token-0",
 			Instant.now(),
 			Instant.now().plus(Duration.ofDays(1)));
+
+	@Before
+	public void setup() {
+		this.function = new ServerOAuth2AuthorizedClientExchangeFilterFunction(this.clientRegistrationRepository, this.authorizedClientRepository);
+	}
 
 	@Test
 	public void filterWhenAuthorizedClientNullThenAuthorizationHeaderNull() {
@@ -108,7 +118,7 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 
 	@Test
 	public void filterWhenAuthorizedClientThenAuthorizationHeader() {
-		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.github,
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
 				"principalName", this.accessToken);
 		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
 				.attributes(oauth2AuthorizedClient(authorizedClient))
@@ -121,7 +131,7 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 
 	@Test
 	public void filterWhenExistingAuthorizationThenSingleAuthorizationHeader() {
-		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.github,
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
 				"principalName", this.accessToken);
 		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
 				.header(HttpHeaders.AUTHORIZATION, "Existing")
@@ -136,7 +146,7 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 
 	@Test
 	public void filterWhenRefreshRequiredThenRefresh() {
-		when(this.authorizedClientService.saveAuthorizedClient(any(), any())).thenReturn(Mono.empty());
+		when(this.authorizedClientRepository.saveAuthorizedClient(any(), any(), any())).thenReturn(Mono.empty());
 		OAuth2AccessTokenResponse response = OAuth2AccessTokenResponse.withToken("token-1")
 				.tokenType(OAuth2AccessToken.TokenType.BEARER)
 				.expiresIn(3600)
@@ -145,16 +155,14 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 		when(this.exchange.getResponse().body(any())).thenReturn(Mono.just(response));
 		Instant issuedAt = Instant.now().minus(Duration.ofDays(1));
 		Instant accessTokenExpiresAt = issuedAt.plus(Duration.ofHours(1));
-		Instant refreshTokenExpiresAt = Instant.now().plus(Duration.ofHours(1));
 
 		this.accessToken = new OAuth2AccessToken(this.accessToken.getTokenType(),
 				this.accessToken.getTokenValue(),
 				issuedAt,
 				accessTokenExpiresAt);
-		this.function = new ServerOAuth2AuthorizedClientExchangeFilterFunction(this.authorizedClientService);
 
-		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", issuedAt, refreshTokenExpiresAt);
-		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.github,
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", issuedAt);
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
 				"principalName", this.accessToken, refreshToken);
 		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
 				.attributes(oauth2AuthorizedClient(authorizedClient))
@@ -165,14 +173,14 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 				.subscriberContext(ReactiveSecurityContextHolder.withAuthentication(authentication))
 				.block();
 
-		verify(this.authorizedClientService).saveAuthorizedClient(any(), eq(authentication));
+		verify(this.authorizedClientRepository).saveAuthorizedClient(any(), eq(authentication), any());
 
 		List<ClientRequest> requests = this.exchange.getRequests();
 		assertThat(requests).hasSize(2);
 
 		ClientRequest request0 = requests.get(0);
-		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Basic Y2xpZW50SWQ6Y2xpZW50U2VjcmV0");
-		assertThat(request0.url().toASCIIString()).isEqualTo("https://github.com/login/oauth/access_token");
+		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=");
+		assertThat(request0.url().toASCIIString()).isEqualTo("https://example.com/login/oauth/access_token");
 		assertThat(request0.method()).isEqualTo(HttpMethod.POST);
 		assertThat(getBody(request0)).isEqualTo("grant_type=refresh_token&refresh_token=refresh-token");
 
@@ -185,7 +193,7 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 
 	@Test
 	public void filterWhenRefreshRequiredAndEmptyReactiveSecurityContextThenSaved() {
-		when(this.authorizedClientService.saveAuthorizedClient(any(), any())).thenReturn(Mono.empty());
+		when(this.authorizedClientRepository.saveAuthorizedClient(any(), any(), any())).thenReturn(Mono.empty());
 		OAuth2AccessTokenResponse response = OAuth2AccessTokenResponse.withToken("token-1")
 				.tokenType(OAuth2AccessToken.TokenType.BEARER)
 				.expiresIn(3600)
@@ -194,16 +202,14 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 		when(this.exchange.getResponse().body(any())).thenReturn(Mono.just(response));
 		Instant issuedAt = Instant.now().minus(Duration.ofDays(1));
 		Instant accessTokenExpiresAt = issuedAt.plus(Duration.ofHours(1));
-		Instant refreshTokenExpiresAt = Instant.now().plus(Duration.ofHours(1));
 
 		this.accessToken = new OAuth2AccessToken(this.accessToken.getTokenType(),
 				this.accessToken.getTokenValue(),
 				issuedAt,
 				accessTokenExpiresAt);
-		this.function = new ServerOAuth2AuthorizedClientExchangeFilterFunction(this.authorizedClientService);
 
-		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", issuedAt, refreshTokenExpiresAt);
-		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.github,
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", issuedAt);
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
 				"principalName", this.accessToken, refreshToken);
 		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
 				.attributes(oauth2AuthorizedClient(authorizedClient))
@@ -212,14 +218,14 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 		this.function.filter(request, this.exchange)
 				.block();
 
-		verify(this.authorizedClientService).saveAuthorizedClient(any(), any());
+		verify(this.authorizedClientRepository).saveAuthorizedClient(any(), any(), any());
 
 		List<ClientRequest> requests = this.exchange.getRequests();
 		assertThat(requests).hasSize(2);
 
 		ClientRequest request0 = requests.get(0);
-		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Basic Y2xpZW50SWQ6Y2xpZW50U2VjcmV0");
-		assertThat(request0.url().toASCIIString()).isEqualTo("https://github.com/login/oauth/access_token");
+		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=");
+		assertThat(request0.url().toASCIIString()).isEqualTo("https://example.com/login/oauth/access_token");
 		assertThat(request0.method()).isEqualTo(HttpMethod.POST);
 		assertThat(getBody(request0)).isEqualTo("grant_type=refresh_token&refresh_token=refresh-token");
 
@@ -232,9 +238,7 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 
 	@Test
 	public void filterWhenRefreshTokenNullThenShouldRefreshFalse() {
-		this.function = new ServerOAuth2AuthorizedClientExchangeFilterFunction(this.authorizedClientService);
-
-		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.github,
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
 				"principalName", this.accessToken);
 		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
 				.attributes(oauth2AuthorizedClient(authorizedClient))
@@ -254,10 +258,8 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 
 	@Test
 	public void filterWhenNotExpiredThenShouldRefreshFalse() {
-		this.function = new ServerOAuth2AuthorizedClientExchangeFilterFunction(this.authorizedClientService);
-
-		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", this.accessToken.getIssuedAt(), this.accessToken.getExpiresAt());
-		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.github,
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", this.accessToken.getIssuedAt());
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
 				"principalName", this.accessToken, refreshToken);
 		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
 				.attributes(oauth2AuthorizedClient(authorizedClient))
@@ -273,6 +275,124 @@ public class ServerOAuth2AuthorizedClientExchangeFilterFunctionTests {
 		assertThat(request0.url().toASCIIString()).isEqualTo("https://example.com");
 		assertThat(request0.method()).isEqualTo(HttpMethod.GET);
 		assertThat(getBody(request0)).isEmpty();
+	}
+
+	@Test
+	public void filterWhenClientRegistrationIdThenAuthorizedClientResolved() {
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", this.accessToken.getIssuedAt());
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
+				"principalName", this.accessToken, refreshToken);
+		when(this.authorizedClientRepository.loadAuthorizedClient(any(), any(), any())).thenReturn(Mono.just(authorizedClient));
+		when(this.clientRegistrationRepository.findByRegistrationId(any())).thenReturn(Mono.just(this.registration));
+		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
+				.attributes(clientRegistrationId(this.registration.getRegistrationId()))
+				.build();
+
+		this.function.filter(request, this.exchange).block();
+
+		List<ClientRequest> requests = this.exchange.getRequests();
+		assertThat(requests).hasSize(1);
+
+		ClientRequest request0 = requests.get(0);
+		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer token-0");
+		assertThat(request0.url().toASCIIString()).isEqualTo("https://example.com");
+		assertThat(request0.method()).isEqualTo(HttpMethod.GET);
+		assertThat(getBody(request0)).isEmpty();
+	}
+
+	@Test
+	public void filterWhenDefaultClientRegistrationIdThenAuthorizedClientResolved() {
+		this.function.setDefaultClientRegistrationId(this.registration.getRegistrationId());
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", this.accessToken.getIssuedAt());
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
+				"principalName", this.accessToken, refreshToken);
+		when(this.authorizedClientRepository.loadAuthorizedClient(any(), any(), any())).thenReturn(Mono.just(authorizedClient));
+		when(this.clientRegistrationRepository.findByRegistrationId(any())).thenReturn(Mono.just(this.registration));
+		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
+				.build();
+
+		this.function.filter(request, this.exchange).block();
+
+		List<ClientRequest> requests = this.exchange.getRequests();
+		assertThat(requests).hasSize(1);
+
+		ClientRequest request0 = requests.get(0);
+		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer token-0");
+		assertThat(request0.url().toASCIIString()).isEqualTo("https://example.com");
+		assertThat(request0.method()).isEqualTo(HttpMethod.GET);
+		assertThat(getBody(request0)).isEmpty();
+	}
+
+	@Test
+	public void filterWhenClientRegistrationIdFromAuthenticationThenAuthorizedClientResolved() {
+		this.function.setDefaultOAuth2AuthorizedClient(true);
+
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", this.accessToken.getIssuedAt());
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
+				"principalName", this.accessToken, refreshToken);
+		when(this.authorizedClientRepository.loadAuthorizedClient(any(), any(), any())).thenReturn(Mono.just(authorizedClient));
+		when(this.clientRegistrationRepository.findByRegistrationId(any())).thenReturn(Mono.just(this.registration));
+		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
+				.build();
+
+		OAuth2User user = new DefaultOAuth2User(AuthorityUtils.createAuthorityList("ROLE_USER"), Collections
+				.singletonMap("user", "rob"), "user");
+		OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(user, user.getAuthorities(), "client-id");
+		this.function
+				.filter(request, this.exchange)
+				.subscriberContext(ReactiveSecurityContextHolder.withAuthentication(authentication))
+				.block();
+
+		List<ClientRequest> requests = this.exchange.getRequests();
+		assertThat(requests).hasSize(1);
+
+		ClientRequest request0 = requests.get(0);
+		assertThat(request0.headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer token-0");
+		assertThat(request0.url().toASCIIString()).isEqualTo("https://example.com");
+		assertThat(request0.method()).isEqualTo(HttpMethod.GET);
+		assertThat(getBody(request0)).isEmpty();
+	}
+
+	@Test
+	public void filterWhenDefaultOAuth2AuthorizedClientFalseThenEmpty() {
+		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
+				.build();
+
+		OAuth2User user = new DefaultOAuth2User(AuthorityUtils.createAuthorityList("ROLE_USER"), Collections
+				.singletonMap("user", "rob"), "user");
+		OAuth2AuthenticationToken authentication = new OAuth2AuthenticationToken(user, user.getAuthorities(), "client-id");
+
+		this.function
+				.filter(request, this.exchange)
+				.subscriberContext(ReactiveSecurityContextHolder.withAuthentication(authentication))
+				.block();
+
+		List<ClientRequest> requests = this.exchange.getRequests();
+		assertThat(requests).hasSize(1);
+
+		verifyZeroInteractions(this.clientRegistrationRepository, this.authorizedClientRepository);
+	}
+
+	@Test
+	public void filterWhenClientRegistrationIdAndServerWebExchangeFromContextThenServerWebExchangeFromContext() {
+		OAuth2RefreshToken refreshToken = new OAuth2RefreshToken("refresh-token", this.accessToken.getIssuedAt());
+		OAuth2AuthorizedClient authorizedClient = new OAuth2AuthorizedClient(this.registration,
+				"principalName", this.accessToken, refreshToken);
+		when(this.authorizedClientRepository.loadAuthorizedClient(any(), any(), any())).thenReturn(Mono.just(authorizedClient));
+		when(this.clientRegistrationRepository.findByRegistrationId(any())).thenReturn(Mono.just(this.registration));
+		ClientRequest request = ClientRequest.create(GET, URI.create("https://example.com"))
+				.attributes(clientRegistrationId(this.registration.getRegistrationId()))
+				.build();
+
+		this.function.filter(request, this.exchange)
+				.subscriberContext(serverWebExchange())
+				.block();
+
+		verify(this.authorizedClientRepository).loadAuthorizedClient(eq(this.registration.getRegistrationId()), any(), eq(this.serverWebExchange));
+	}
+
+	private Context serverWebExchange() {
+		return Context.of(ServerWebExchange.class, this.serverWebExchange);
 	}
 
 	private static String getBody(ClientRequest request) {

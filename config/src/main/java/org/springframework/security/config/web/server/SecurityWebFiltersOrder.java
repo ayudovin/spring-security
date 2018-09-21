@@ -24,6 +24,14 @@ public enum SecurityWebFiltersOrder {
 	FIRST(Integer.MIN_VALUE),
 	HTTP_HEADERS_WRITER,
 	/**
+	 * {@link org.springframework.security.web.server.transport.HttpsRedirectWebFilter}
+	 */
+	HTTPS_REDIRECT,
+	/**
+	 * {@link org.springframework.web.cors.reactive.CorsWebFilter}
+	 */
+	CORS,
+	/**
 	 * {@link org.springframework.security.web.server.csrf.CsrfWebFilter}
 	 */
 	CSRF,
@@ -40,6 +48,7 @@ public enum SecurityWebFiltersOrder {
 	 */
 	FORM_LOGIN,
 	AUTHENTICATION,
+	OAUTH2_AUTHORIZATION_CODE,
 	LOGIN_PAGE_GENERATING,
 	LOGOUT_PAGE_GENERATING,
 	/**

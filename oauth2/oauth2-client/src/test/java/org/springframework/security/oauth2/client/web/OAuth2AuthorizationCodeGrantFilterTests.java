@@ -38,10 +38,9 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authoriza
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
-import org.springframework.security.oauth2.core.AuthorizationGrantType;
-import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
+import org.springframework.security.oauth2.client.registration.TestClientRegistrations;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
-import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
@@ -82,19 +81,7 @@ public class OAuth2AuthorizationCodeGrantFilterTests {
 
 	@Before
 	public void setup() {
-		this.registration1 = ClientRegistration.withRegistrationId("registration-1")
-			.clientId("client-1")
-			.clientSecret("secret")
-			.clientAuthenticationMethod(ClientAuthenticationMethod.BASIC)
-			.authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-			.redirectUriTemplate("{baseUrl}/callback/client-1")
-			.scope("user")
-			.authorizationUri("https://provider.com/oauth2/authorize")
-			.tokenUri("https://provider.com/oauth2/token")
-			.userInfoUri("https://provider.com/oauth2/user")
-			.userNameAttributeName("id")
-			.clientName("client-1")
-			.build();
+		this.registration1 = TestClientRegistrations.clientRegistration().build();
 		this.clientRegistrationRepository = new InMemoryClientRegistrationRepository(this.registration1);
 		this.authorizedClientService = new InMemoryOAuth2AuthorizedClientService(this.clientRegistrationRepository);
 		this.authorizedClientRepository = new AuthenticatedPrincipalOAuth2AuthorizedClientRepository(this.authorizedClientService);
@@ -209,7 +196,7 @@ public class OAuth2AuthorizationCodeGrantFilterTests {
 	}
 
 	@Test
-	public void doFilterWhenAuthenticationFailsThenHandleOAuth2AuthenticationException() throws Exception {
+	public void doFilterWhenAuthorizationFailsThenHandleOAuth2AuthorizationException() throws Exception {
 		String requestUri = "/callback/client-1";
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", requestUri);
 		request.setServletPath(requestUri);
@@ -222,7 +209,7 @@ public class OAuth2AuthorizationCodeGrantFilterTests {
 		this.setUpAuthorizationRequest(request, response, this.registration1);
 		OAuth2Error error = new OAuth2Error(OAuth2ErrorCodes.INVALID_GRANT);
 		when(this.authenticationManager.authenticate(any(Authentication.class)))
-			.thenThrow(new OAuth2AuthenticationException(error, error.toString()));
+			.thenThrow(new OAuth2AuthorizationException(error));
 
 		this.filter.doFilter(request, response, filterChain);
 
@@ -325,6 +312,44 @@ public class OAuth2AuthorizationCodeGrantFilterTests {
 
 		assertThat(authorizedClient.getClientRegistration()).isEqualTo(this.registration1);
 		assertThat(authorizedClient.getPrincipalName()).isEqualTo(anonymousPrincipal.getName());
+		assertThat(authorizedClient.getAccessToken()).isNotNull();
+
+		HttpSession session = request.getSession(false);
+		assertThat(session).isNotNull();
+
+		@SuppressWarnings("unchecked")
+		Map<String, OAuth2AuthorizedClient> authorizedClients = (Map<String, OAuth2AuthorizedClient>)
+				session.getAttribute(HttpSessionOAuth2AuthorizedClientRepository.class.getName() + ".AUTHORIZED_CLIENTS");
+		assertThat(authorizedClients).isNotEmpty();
+		assertThat(authorizedClients).hasSize(1);
+		assertThat(authorizedClients.values().iterator().next()).isSameAs(authorizedClient);
+	}
+
+	@Test
+	public void doFilterWhenAuthorizationResponseSuccessAndAnonymousAccessNullAuthenticationThenAuthorizedClientSavedToHttpSession() throws Exception {
+		SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+		SecurityContextHolder.setContext(securityContext);		// null Authentication
+
+		String requestUri = "/callback/client-1";
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", requestUri);
+		request.setServletPath(requestUri);
+		request.addParameter(OAuth2ParameterNames.CODE, "code");
+		request.addParameter(OAuth2ParameterNames.STATE, "state");
+
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		FilterChain filterChain = mock(FilterChain.class);
+
+		this.setUpAuthorizationRequest(request, response, this.registration1);
+		this.setUpAuthenticationResult(this.registration1);
+
+		this.filter.doFilter(request, response, filterChain);
+
+		OAuth2AuthorizedClient authorizedClient = this.authorizedClientRepository.loadAuthorizedClient(
+				this.registration1.getRegistrationId(), null, request);
+		assertThat(authorizedClient).isNotNull();
+
+		assertThat(authorizedClient.getClientRegistration()).isEqualTo(this.registration1);
+		assertThat(authorizedClient.getPrincipalName()).isEqualTo("anonymousUser");
 		assertThat(authorizedClient.getAccessToken()).isNotNull();
 
 		HttpSession session = request.getSession(false);

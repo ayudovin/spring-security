@@ -19,20 +19,27 @@ package org.springframework.security.config.annotation.web.configurers.oauth2.se
 import javax.servlet.http.HttpServletRequest;
 
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.web.HttpSecurityBuilder;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.config.annotation.web.configurers.ExceptionHandlingConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoderJwkSupport;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationProvider;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationFilter;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
 import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
 import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.util.Assert;
 
@@ -47,6 +54,9 @@ import org.springframework.util.Assert;
  * The following configuration options are available:
  *
  * <ul>
+ * <li>{@link #accessDeniedHandler(AccessDeniedHandler)}</li> - customizes how access denied errors are handled
+ * <li>{@link #authenticationEntryPoint(AuthenticationEntryPoint)}</li> - customizes how authentication failures are handled
+ * <li>{@link #bearerTokenResolver(BearerTokenResolver)} - customizes how to resolve a bearer token from the request</li>
  * <li>{@link #jwt()} - enables Jwt-encoded bearer token support</li>
  * </ul>
  *
@@ -62,6 +72,15 @@ import org.springframework.util.Assert;
  * </li>
  * <li>
  * expose a {@link JwtDecoder} bean
+ * </li>
+ * </ul>
+ *
+ * Also with {@link #jwt()} consider
+ *
+ * <ul>
+ * <li>
+ * customizing the conversion from a {@link Jwt} to an {@link org.springframework.security.core.Authentication} with
+ * {@link JwtConfigurer#jwtAuthenticationConverter(Converter)}
  * </li>
  * </ul>
  *
@@ -99,35 +118,49 @@ import org.springframework.util.Assert;
 public final class OAuth2ResourceServerConfigurer<H extends HttpSecurityBuilder<H>> extends
 		AbstractHttpConfigurer<OAuth2ResourceServerConfigurer<H>, H> {
 
-	private BearerTokenResolver bearerTokenResolver = new DefaultBearerTokenResolver();
+	private final ApplicationContext context;
+
+	private BearerTokenResolver bearerTokenResolver;
+	private JwtConfigurer jwtConfigurer;
+
+	private AccessDeniedHandler accessDeniedHandler = new BearerTokenAccessDeniedHandler();
+	private AuthenticationEntryPoint authenticationEntryPoint = new BearerTokenAuthenticationEntryPoint();
 	private BearerTokenRequestMatcher requestMatcher = new BearerTokenRequestMatcher();
 
-	private BearerTokenAuthenticationEntryPoint authenticationEntryPoint
-			= new BearerTokenAuthenticationEntryPoint();
+	public OAuth2ResourceServerConfigurer(ApplicationContext context) {
+		Assert.notNull(context, "context cannot be null");
+		this.context = context;
+	}
 
-	private BearerTokenAccessDeniedHandler accessDeniedHandler
-			= new BearerTokenAccessDeniedHandler();
+	public OAuth2ResourceServerConfigurer<H> accessDeniedHandler(AccessDeniedHandler accessDeniedHandler) {
+		Assert.notNull(accessDeniedHandler, "accessDeniedHandler cannot be null");
+		this.accessDeniedHandler = accessDeniedHandler;
+		return this;
+	}
 
-	private JwtConfigurer jwtConfigurer;
+	public OAuth2ResourceServerConfigurer<H> authenticationEntryPoint(AuthenticationEntryPoint entryPoint) {
+		Assert.notNull(entryPoint, "entryPoint cannot be null");
+		this.authenticationEntryPoint = entryPoint;
+		return this;
+	}
+
+	public OAuth2ResourceServerConfigurer<H> bearerTokenResolver(BearerTokenResolver bearerTokenResolver) {
+		Assert.notNull(bearerTokenResolver, "bearerTokenResolver cannot be null");
+		this.bearerTokenResolver = bearerTokenResolver;
+		return this;
+	}
 
 	public JwtConfigurer jwt() {
 		if ( this.jwtConfigurer == null ) {
-			ApplicationContext context = this.getBuilder().getSharedObject(ApplicationContext.class);
-			this.jwtConfigurer = new JwtConfigurer(context);
+			this.jwtConfigurer = new JwtConfigurer(this.context);
 		}
 
 		return this.jwtConfigurer;
 	}
 
 	@Override
-	public void setBuilder(H http) {
-		super.setBuilder(http);
-		initSessionCreationPolicy(http);
-	}
-
-	@Override
 	public void init(H http) throws Exception {
-		registerDefaultDeniedHandler(http);
+		registerDefaultAccessDeniedHandler(http);
 		registerDefaultEntryPoint(http);
 		registerDefaultCsrfOverride(http);
 	}
@@ -142,6 +175,7 @@ public final class OAuth2ResourceServerConfigurer<H extends HttpSecurityBuilder<
 		BearerTokenAuthenticationFilter filter =
 				new BearerTokenAuthenticationFilter(manager);
 		filter.setBearerTokenResolver(bearerTokenResolver);
+		filter.setAuthenticationEntryPoint(this.authenticationEntryPoint);
 		filter = postProcess(filter);
 
 		http.addFilter(filter);
@@ -155,9 +189,12 @@ public final class OAuth2ResourceServerConfigurer<H extends HttpSecurityBuilder<
 		}
 
 		JwtDecoder decoder = this.jwtConfigurer.getJwtDecoder();
+		Converter<Jwt, ? extends AbstractAuthenticationToken> jwtAuthenticationConverter =
+				this.jwtConfigurer.getJwtAuthenticationConverter();
 
 		JwtAuthenticationProvider provider =
 				new JwtAuthenticationProvider(decoder);
+		provider.setJwtAuthenticationConverter(jwtAuthenticationConverter);
 		provider = postProcess(provider);
 
 		http.authenticationProvider(provider);
@@ -168,18 +205,36 @@ public final class OAuth2ResourceServerConfigurer<H extends HttpSecurityBuilder<
 
 		private JwtDecoder decoder;
 
+		private Converter<Jwt, ? extends AbstractAuthenticationToken> jwtAuthenticationConverter =
+				new JwtAuthenticationConverter();
+
 		JwtConfigurer(ApplicationContext context) {
 			this.context = context;
 		}
 
-		public OAuth2ResourceServerConfigurer<H> decoder(JwtDecoder decoder) {
+		public JwtConfigurer decoder(JwtDecoder decoder) {
 			this.decoder = decoder;
+			return this;
+		}
+
+		public JwtConfigurer jwkSetUri(String uri) {
+			this.decoder = new NimbusJwtDecoderJwkSupport(uri);
+			return this;
+		}
+
+		public JwtConfigurer jwtAuthenticationConverter
+				(Converter<Jwt, ? extends AbstractAuthenticationToken> jwtAuthenticationConverter) {
+
+			this.jwtAuthenticationConverter = jwtAuthenticationConverter;
+			return this;
+		}
+
+		public OAuth2ResourceServerConfigurer<H> and() {
 			return OAuth2ResourceServerConfigurer.this;
 		}
 
-		public OAuth2ResourceServerConfigurer<H> jwkSetUri(String uri) {
-			this.decoder = new NimbusJwtDecoderJwkSupport(uri);
-			return OAuth2ResourceServerConfigurer.this;
+		Converter<Jwt, ? extends AbstractAuthenticationToken> getJwtAuthenticationConverter() {
+			return this.jwtAuthenticationConverter;
 		}
 
 		JwtDecoder getJwtDecoder() {
@@ -191,13 +246,7 @@ public final class OAuth2ResourceServerConfigurer<H extends HttpSecurityBuilder<
 		}
 	}
 
-	private void initSessionCreationPolicy(H http) {
-		if (http.getSharedObject(SessionCreationPolicy.class) == null) {
-			http.setSharedObject(SessionCreationPolicy.class, SessionCreationPolicy.STATELESS);
-		}
-	}
-
-	private void registerDefaultDeniedHandler(H http) {
+	private void registerDefaultAccessDeniedHandler(H http) {
 		ExceptionHandlingConfigurer<H> exceptionHandling = http
 				.getConfigurer(ExceptionHandlingConfigurer.class);
 		if (exceptionHandling == null) {
@@ -231,17 +280,28 @@ public final class OAuth2ResourceServerConfigurer<H extends HttpSecurityBuilder<
 		csrf.ignoringRequestMatchers(this.requestMatcher);
 	}
 
-	private BearerTokenResolver getBearerTokenResolver() {
+	BearerTokenResolver getBearerTokenResolver() {
+		if ( this.bearerTokenResolver == null ) {
+			if ( this.context.getBeanNamesForType(BearerTokenResolver.class).length > 0 ) {
+				this.bearerTokenResolver = this.context.getBean(BearerTokenResolver.class);
+			} else {
+				this.bearerTokenResolver = new DefaultBearerTokenResolver();
+			}
+		}
+
 		return this.bearerTokenResolver;
 	}
 
 	private static final class BearerTokenRequestMatcher implements RequestMatcher {
-		private BearerTokenResolver bearerTokenResolver
-				= new DefaultBearerTokenResolver();
+		private BearerTokenResolver bearerTokenResolver;
 
 		@Override
 		public boolean matches(HttpServletRequest request) {
-			return this.bearerTokenResolver.resolve(request) != null;
+			try {
+				return this.bearerTokenResolver.resolve(request) != null;
+			} catch ( OAuth2AuthenticationException e ) {
+				return false;
+			}
 		}
 
 		public void setBearerTokenResolver(BearerTokenResolver tokenResolver) {

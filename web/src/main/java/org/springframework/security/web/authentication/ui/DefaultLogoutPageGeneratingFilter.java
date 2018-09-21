@@ -64,7 +64,7 @@ public class DefaultLogoutPageGeneratingFilter extends OncePerRequestFilter {
 				+ "    <meta name=\"author\" content=\"\">\n"
 				+ "    <title>Confirm Log Out?</title>\n"
 				+ "    <link href=\"https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-beta/css/bootstrap.min.css\" rel=\"stylesheet\" integrity=\"sha384-/Y6pD6FV/Vv2HJnA6t+vslU6fwYXjCFtcEpHbNJ0lyAFsXTsjBbfaDjzALeQsN6M\" crossorigin=\"anonymous\">\n"
-				+ "    <link href=\"http://getbootstrap.com/docs/4.0/examples/signin/signin.css\" rel=\"stylesheet\" crossorigin=\"anonymous\"/>\n"
+				+ "    <link href=\"https://getbootstrap.com/docs/4.0/examples/signin/signin.css\" rel=\"stylesheet\" crossorigin=\"anonymous\"/>\n"
 				+ "  </head>\n"
 				+ "  <body>\n"
 				+ "     <div class=\"container\">\n"
@@ -95,7 +95,7 @@ public class DefaultLogoutPageGeneratingFilter extends OncePerRequestFilter {
 
 	private String renderHiddenInputs(HttpServletRequest request) {
 		StringBuilder sb = new StringBuilder();
-		for(Map.Entry<String, String> input : this.resolveHiddenInputs.apply(request).entrySet()) {
+		for (Map.Entry<String, String> input : this.resolveHiddenInputs.apply(request).entrySet()) {
 			sb.append("<input name=\"").append(input.getKey()).append("\" type=\"hidden\" value=\"").append(input.getValue()).append("\" />\n");
 		}
 		return sb.toString();

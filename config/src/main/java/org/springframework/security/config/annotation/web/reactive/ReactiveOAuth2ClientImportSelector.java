@@ -21,6 +21,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.ImportSelector;
 import org.springframework.core.type.AnnotationMetadata;
 import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.server.AuthenticatedPrincipalServerOAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.client.web.reactive.result.method.annotation.OAuth2AuthorizedClientArgumentResolver;
 import org.springframework.util.ClassUtils;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
@@ -51,13 +54,28 @@ final class ReactiveOAuth2ClientImportSelector implements ImportSelector {
 
 	@Configuration
 	static class OAuth2ClientWebFluxSecurityConfiguration implements WebFluxConfigurer {
+		private ReactiveClientRegistrationRepository clientRegistrationRepository;
+
+		private ServerOAuth2AuthorizedClientRepository authorizedClientRepository;
+
 		private ReactiveOAuth2AuthorizedClientService authorizedClientService;
 
 		@Override
 		public void configureArgumentResolvers(ArgumentResolverConfigurer configurer) {
-			if (this.authorizedClientService != null) {
-				configurer.addCustomResolver(new OAuth2AuthorizedClientArgumentResolver(this.authorizedClientService));
+			if (this.authorizedClientRepository != null && this.clientRegistrationRepository != null) {
+				configurer.addCustomResolver(new OAuth2AuthorizedClientArgumentResolver(this.clientRegistrationRepository, getAuthorizedClientRepository()));
 			}
+		}
+
+		@Autowired(required = false)
+		public void setClientRegistrationRepository(
+				ReactiveClientRegistrationRepository clientRegistrationRepository) {
+			this.clientRegistrationRepository = clientRegistrationRepository;
+		}
+
+		@Autowired(required = false)
+		public void setAuthorizedClientRepository(ServerOAuth2AuthorizedClientRepository authorizedClientRepository) {
+			this.authorizedClientRepository = authorizedClientRepository;
 		}
 
 		@Autowired(required = false)
@@ -65,6 +83,16 @@ final class ReactiveOAuth2ClientImportSelector implements ImportSelector {
 			if (authorizedClientService.size() == 1) {
 				this.authorizedClientService = authorizedClientService.get(0);
 			}
+		}
+
+		private ServerOAuth2AuthorizedClientRepository getAuthorizedClientRepository() {
+			if (this.authorizedClientRepository != null) {
+				return this.authorizedClientRepository;
+			}
+			if (this.authorizedClientService != null) {
+				return new AuthenticatedPrincipalServerOAuth2AuthorizedClientRepository(this.authorizedClientService);
+			}
+			return null;
 		}
 	}
 }
